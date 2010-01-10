@@ -1,7 +1,6 @@
 ;(use 'clj-stacktrace.repl)
-
-(ns painter
-  (:require [clojure.walk :as walk]))
+(use 'clojure.contrib.trace)
+(ns painter)
 
 
 (def *db* (ref {}))
@@ -78,25 +77,22 @@
     ;matches sammeln
     (filter #(not (nil? %)) (map (fn [x] (match pattern x bds)) data))))
 
-
 (def interpret-query)
 
 ;wenn interpret-query mit diesen bds nicht leer ist, '() zurueckgeben. Sonst bds
-(defn interpret-not [clauses bds]
-  (if
-      (empty? (interpret-query clauses bds)) bds
-      '()))
+(defn interpret-not [clause bds]
+  (if  (empty? (interpret-query clause bds)) (list bds)
+       '()))
     
-
-
 (defn interpret-or [clauses bds]
   (mapcat #(interpret-query % bds) clauses))
 
 ;interpret-and gibt eine liste von bindings zurueck, dir alle clauses erfüllen. Wendet man darauf einen ausdruck an,
 ;bleiben die übrig, die außerdem noch diesen ausdruck erfüllen
 (defn interpret-and [clauses bds]
+  (do
   (if (empty? clauses) (list bds)
-      (mapcat #(interpret-query (first clauses) %) (interpret-and (rest clauses) bds))))
+      (mapcat #(interpret-query (first clauses) %) (interpret-and (rest clauses) bds)))))
 
 ;(interpret-query '(and (painter :?x :?y venetian) (dates :?x 1697 :?w)))
 (defn interpret-query
@@ -104,65 +100,11 @@
  ([expr bds]
     (let [e (first expr)]
       (cond
-       (= e 'and) (interpret-and (rest expr) bds)
-       (= e 'not) (interpret-not (rest expr) bds)
+       (= e 'and) (interpret-and (reverse (rest expr)) bds)
+       (= e 'not) (interpret-not (first (rest expr)) bds)
        (= e 'or)  (interpret-or (rest expr) bds)
        true        (lookup e (rest expr) bds))
       )))
-
-
-;usage: (with-answer (painter ?a ?b english) (prn '?a))
-(defmacro with-answer [query body]
-  `(do
-       ~@(map
-	(fn [x]
-	  (let [rbody# (walk/postwalk-replace x body)]
-	    rbody#)
-	  )
-	(interpret-query query)))
-)
-
-;dynamic let with macros
-
-(defmacro dynlet [bvec body]
-    `(let ~bvec
-       ~body))
-; used by pm-progv macro to create an expression of the form
-;
-; (let (<binding-list)
-;    <expression>)
-;
-; where <binding-list> is of the form (<variable1> <value1>) (<variable2> <value2>) ...
-;       <expression> is a Scheme expression
-;(define (-pm-progv variables values expression)
-;  (let ((l (map (lambda (a b) (list a b))
-;                variables
-;                values)))
-;    (list 'let l expression)));
-
-
-; simple *similar* version of CL's progv
-;(define-macro (pm-progv variables values expression)
-;  `(eval (-pm-progv ,variables ,values ,expression) (interaction-environment)))
-
-
-; used by pm-progv macro to create an expression of the form
-;
-; (let (<binding-list)
-;    <expression>)
-;
-; where <binding-list> is of the form (<variable1> <value1>) (<variable2> <value2>) ...
-;       <expression> is a Scheme expression
-(defn -pm-progv [variables values expression]
-  (let [l (map (fn [a b] (list a b))
-                variables
-                values)]
-    (list 'let (vec l) expression)))
-
-
-; simple *similar* version of CL's progv
-;(define-macro (pm-progv variables values expression)
-;  `(eval (-pm-progv ,variables ,values ,expression) (interaction-environment)))
 
 
 (defn -dynlet [bvec body]
@@ -177,6 +119,8 @@
 (defmacro dynletmap [bvec body]
   `(eval (-dynletmap ~bvec ~body)))
 
+
+;usage: (with-answer (painter ?a ?b english) (prn ?a))
 (defmacro with-answer [query body]
   `(do
        ~@(map
@@ -185,3 +129,33 @@
 	  )
 	(interpret-query query)))
 )
+
+
+;test
+;The first name and nationality of every painter called Hogarth.
+(with-answer (painter hogarth ?x ?y)
+	     (prn (list ?x ?y)))
+;(WILLIAM ENGLISH)
+;NIL
+;The last name of every painter born in 1697. (Our original example.)
+(with-answer (and (painter ?x ?1 ?2)
+		  (dates ?x 1697 ?3))
+     (prn (list ?x)))
+;(CANALE)(HOGARTH)
+;NIL
+;The last name and year of birth of everyone who died in 1772 or 1792.
+(with-answer (or (dates ?x ?y 1772)
+		 (dates ?x ?y 1792))
+	     (prn (list ?x ?y)))
+;(HOGARTH 1697)(REYNOLDS 1723)
+;NIL
+
+;The last name of every English painter not born the same year as a Venetian
+;one.
+(with-answer (and (painter ?x ?1 english)
+		  (dates ?x ?b ?2)
+		  (not (and (painter ?x2 ?3 venetian)
+			    (dates ?x2 ?b ?4))))
+	     (prn ?x))
+;REYNOLDS
+;NIL
